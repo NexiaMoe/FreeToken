@@ -38,11 +38,17 @@ if TYPE_CHECKING:
 
 def _make_proj(quant: str, in_features: int, out_features: int) -> BaseOP:
     """A resident projection in the model's resolved quant mode: ``"fp8_pertensor"``
-    (W8A16, per-row scale, quantized at load -- see weight.py) or bf16."""
+    (W8A16, per-row scale, quantized at load -- see weight.py), ``"nvfp4"`` (W4A16 on the
+    checkpoint's own packed FP4, used by the GLM-4.7-Flash lite checkpoints whose dense
+    MLP and shared experts ship quantized), or bf16."""
     if quant == "fp8_pertensor":
         from freetoken.kernel.triton.fp8_pertensor_linear import Fp8PerTensorLinear
 
         return Fp8PerTensorLinear(in_features, out_features, has_bias=False)
+    if quant == "nvfp4":
+        from freetoken.kernel.triton.nvfp4_linear import Nvfp4DenseLinear
+
+        return Nvfp4DenseLinear(in_features, out_features, has_bias=False)
     return LinearReplicated(in_features, out_features, has_bias=False)
 
 

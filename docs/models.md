@@ -9,6 +9,7 @@ for them; other checkpoints of the same architectures work too.
 | DeepSeek-V4 | [deepseek-ai/DeepSeek-V4-Flash-0731](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731) |
 | GLM-5.2 | [nvidia/GLM-5.2-NVFP4](https://huggingface.co/nvidia/GLM-5.2-NVFP4) |
 | GLM-4.7 | [nvidia/GLM-4.7-NVFP4](https://huggingface.co/nvidia/GLM-4.7-NVFP4) |
+| GLM-4.7-Flash | [GadflyII/GLM-4.7-Flash-NVFP4](https://huggingface.co/GadflyII/GLM-4.7-Flash-NVFP4) |
 | Qwen3.6 / Qwen3.5 MoE | [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) ([-FP8](https://huggingface.co/Qwen/Qwen3.6-35B-A3B-FP8)), [nvidia/Qwen3.6-35B-A3B-NVFP4](https://huggingface.co/nvidia/Qwen3.6-35B-A3B-NVFP4), [Qwen/Qwen3.5-35B-A3B](https://huggingface.co/Qwen/Qwen3.5-35B-A3B) ([-FP8](https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8)) |
 | Qwen3.6 dense | [Qwen/Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) ([-FP8](https://huggingface.co/Qwen/Qwen3.6-27B-FP8)), [nvidia/Qwen3.6-27B-NVFP4](https://huggingface.co/nvidia/Qwen3.6-27B-NVFP4) |
 | Qwen3-MoE | [Qwen/Qwen3-30B-A3B](https://huggingface.co/Qwen/Qwen3-30B-A3B) |
@@ -52,3 +53,10 @@ for them; other checkpoints of the same architectures work too.
   server with `--chat-template-kwargs {"enable_thinking":true}` to flip the default;
   a request that asks for thinking either way still wins. Keep the JSON space-free —
   a launcher that builds argv without a shell splits the value on whitespace.
+- GLM-4.7-Flash needs a **uniformly-NVFP4** export. It runs the GLM-5.2 decoder with its
+  DSA indexer config-gated off (plain latent-KV MLA); routed experts, shared experts and
+  the leading dense MLP are NVFP4 while MLA, the router and `lm_head` stay BF16. The
+  `mixed-precision` exports that quantize a few expert layers to FP8 and the rest to
+  NVFP4 are rejected at config parse: one offload-cache slot pool is shared by every
+  layer, so a bank's rows must have the same shape and dtype throughout. Its trailing
+  MTP layer is skipped.

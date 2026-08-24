@@ -254,6 +254,16 @@ SUPPORTED_MODELS: tuple[AotModel, ...] = (
         expert_formats=_NVFP4_FORMATS,
     ),
     AotModel(
+        # Same latent-KV MLA store path as GLM-5.2 above: no paged-KV store groups.
+        name="GadflyII/GLM-4.7-Flash-NVFP4",
+        architecture="Glm4MoeLiteForCausalLM",
+        hidden_size=2048,
+        kv_groups=(),
+        top_k=4,
+        moe_intermediate_size=1536,
+        expert_formats=_NVFP4_FORMATS,
+    ),
+    AotModel(
         # MiniMaxAI/MiniMax-M2.5 ships block-fp8, which has no expert-bank
         # provider for this arch on main -- the NVFP4 release is the servable
         # offload path, and both share the same attention/embedding shapes.

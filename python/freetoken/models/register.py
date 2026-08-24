@@ -122,6 +122,13 @@ _MODEL_REGISTRY: dict[str, ModelSpec] = {
         "freetoken.models.glm_moe_dsa",
         "GlmMoeDsaForCausalLM",
     ),
+    # GLM-4.7-Flash (model_type glm4_moe_lite): the same MLA + sigmoid/noaux_tc MoE
+    # decoder as GLM-5.2 with no DSA indexer, so it runs the glm_moe_dsa graph with a
+    # plain latent-KV MLA group. NVFP4 routed/shared/dense-MLP, BF16 attention.
+    "Glm4MoeLiteForCausalLM": ModelSpec(
+        "freetoken.models.glm4_moe_lite",
+        "Glm4MoeLiteForCausalLM",
+    ),
     # poolside Laguna XS 2.x: 3:1 sliding/full attention with per-type rope and per-type
     # query-head counts, per-head gated attention, and GLM-style sigmoid/correction-bias
     # MoE routing after one leading dense layer. NVFP4 routed + shared experts.
