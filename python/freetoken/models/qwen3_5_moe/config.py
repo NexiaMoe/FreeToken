@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from freetoken.models.config import (
@@ -145,6 +146,62 @@ def _shared_expert_quant(hf_config: Any) -> str | None:
                 return "nvfp4"
             if "fp8" in algo:
                 return "fp8_pertensor"
+    # No modelopt map: a compressed-tensors export declares the same thing via targets.
+    return _ct_component_quant(hf_config, "shared_expert")
+
+
+#: A representative module path per component, matched against a compressed-tensors
+#: group's ``targets`` to learn what THAT component is stored as.
+_CT_PROBE_MODULES = {
+    "shared_expert": "model.layers.0.mlp.shared_expert.gate_proj",
+    "attn": "model.layers.0.self_attn.q_proj",
+    "experts": "model.layers.0.mlp.experts.0.gate_proj",
+}
+
+
+def _ct_group_scheme(weights: dict) -> str | None:
+    """A compressed-tensors group's weight spec -> the FreeToken quant mode it needs."""
+    bits = int(weights.get("num_bits", 0) or 0)
+    kind = str(weights.get("type", "")).lower()
+    if kind != "float":
+        return None
+    if bits == 4 and int(weights.get("group_size", 0) or 0) == 16:
+        return "nvfp4"
+    if bits == 8:
+        return "fp8_pertensor"
+    return None
+
+
+def _ct_component_quant(hf_config: Any, component: str) -> str | None:
+    """What a compressed-tensors export stores ``component`` as, read from the group
+    ``targets`` rather than assumed from the routed experts.
+
+    A ``mixed-precision`` compressed-tensors export splits by component:
+    primitive-ai/Ornith-1.5-35B-A3B-agentic-NVFP4-FP8 targets the routed experts with an
+    NVFP4 group and attention/GDN/shared-expert with a per-tensor FP8 one. Treating the
+    whole checkpoint as NVFP4 because one group is NVFP4 builds FP4 layers for FP8
+    tensors. ``None`` -> the checkpoint says nothing about this component.
+    """
+    get = _quant_accessor(hf_config)
+    if get is None:
+        return None
+    groups = get("config_groups") or {}
+    if not isinstance(groups, dict):
+        return None
+    probe = _CT_PROBE_MODULES[component]
+    for group in groups.values():
+        scheme = _ct_group_scheme((group or {}).get("weights") or {})
+        if scheme is None:
+            continue
+        for target in (group or {}).get("targets") or ():
+            target = str(target)
+            if target == "Linear":  # every Linear -> covers this component too
+                return scheme
+            if target.startswith("re:"):
+                if re.search(target[3:], probe):
+                    return scheme
+            elif probe.endswith(target) or target.endswith(probe):
+                return scheme
     return None
 
 
@@ -229,16 +286,23 @@ def parse_config(hf_config: Any) -> ModelConfig:
         dense_quant = "nvfp4" if expert_quant == "nvfp4" else _dense_mlp_quant(hf_config)
     lm_head_quant = _lm_head_quant(hf_config)
 
-    # Compressed-tensors NVFP4 quantizes routed experts in the same native layout as
-    # dense linears. Routed MoE checkpoints must use native FP4 expert banks; dense
-    # variants have no banks. Some exports intentionally leave GDN out_proj bf16.
+    # Compressed-tensors NVFP4 usually quantizes routed experts in the same native layout
+    # as the dense linears, so a single-scheme export makes everything NVFP4. A
+    # ``mixed-precision`` compressed-tensors export splits by component instead
+    # (Ornith-1.5-agentic-NVFP4-FP8: NVFP4 routed experts, per-tensor FP8 attention/GDN/
+    # shared expert), and ``detect_compressed_tensors_nvfp4`` answers True for it because
+    # SOME group is NVFP4 -- so each component is resolved from its own group's targets,
+    # falling back to NVFP4 only where the checkpoint says nothing.
     if _compressed_tensors_nvfp4(hf_config):
         if getattr(text, "num_experts", 0):
-            expert_quant = "nvfp4"
-        attn_quant = "nvfp4"
-        dense_quant = "nvfp4"
+            expert_quant = _ct_component_quant(hf_config, "experts") or "nvfp4"
+        attn_quant = _ct_component_quant(hf_config, "attn") or "nvfp4"
+        dense_quant = _ct_component_quant(hf_config, "shared_expert") or "nvfp4"
         lm_head_quant = "none"
-        linear_attn_out_quant = _compressed_tensors_linear_attn_out_quant(hf_config)
+        if attn_quant == "nvfp4":
+            linear_attn_out_quant = _compressed_tensors_linear_attn_out_quant(hf_config)
+        else:
+            linear_attn_out_quant = attn_quant
 
     # Dense variants (e.g. Qwen3.6-27B) report num_experts==0: route the decoder MLP through
     # the dense Qwen3_5DenseMLP instead of the MoE block.

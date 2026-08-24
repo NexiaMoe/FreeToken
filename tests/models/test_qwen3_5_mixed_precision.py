@@ -1,12 +1,19 @@
-"""modelopt MIXED_PRECISION Qwen3.5 derivatives whose shared expert disagrees with the
-routed experts.
+"""Qwen3.5 derivatives whose components are NOT all quantized the same way.
 
-``dense_quant`` used to be inferred as "whatever the routed experts are", which holds for
-every NVFP4 export seen so far. apodex/Apodex-1.1-mini-NVFP4 breaks it: its
-``quantized_layers`` map lists ``.mlp.experts`` as NVFP4 and every
-``.mlp.shared_expert.*`` entry as FP8. Inferring FP4 there builds an
-``Nvfp4DenseColMerged`` whose ``gate_up_proj.weight`` the loader can never fill --
-KeyError at load, long after the checkpoint has been read.
+``dense_quant``/``attn_quant`` used to be inferred as "whatever the routed experts are",
+which holds for every single-scheme NVFP4 export. Two real checkpoints break it, one per
+quantization dialect:
+
+* apodex/Apodex-1.1-mini-NVFP4 -- modelopt MIXED_PRECISION. Its ``quantized_layers`` map
+  lists ``.mlp.experts`` as NVFP4 and every ``.mlp.shared_expert.*`` entry as FP8.
+* primitive-ai/Ornith-1.5-35B-A3B-agentic-NVFP4-FP8 -- compressed-tensors
+  ``mixed-precision``. It has no ``quantized_layers``; the split lives in the group
+  ``targets``, an NVFP4 group for the routed experts and a per-tensor FP8 group for
+  attention, GDN and the shared expert.
+
+Both build FP4 layers for FP8 tensors under the old inference, and the second is worse:
+``detect_compressed_tensors_nvfp4`` answers True whenever SOME group is NVFP4, so the
+compressed-tensors branch forced attention to FP4 as well.
 """
 
 from __future__ import annotations
@@ -183,3 +190,78 @@ def test_the_dense_mlp_pair_does_not_capture_the_shared_expert():
         assert not any(
             "model.layers.0.mlp.shared_expert.gate_proj".endswith(p) for p in parts
         ), fused
+
+
+# ============================ compressed-tensors mixed-precision ======================
+# No quantized_layers map: the per-component split lives in each group's ``targets``.
+
+
+def _ct_config(groups: dict) -> _Cfg:
+    base = _hf_config(None)
+    base.quantization_config = {
+        "quant_method": "compressed-tensors",
+        "format": "mixed-precision",
+        "config_groups": groups,
+        "ignore": ["model.visual.blocks.0.attn.qkv"],
+    }
+    return base
+
+
+_CT_FP8 = {"num_bits": 8, "type": "float", "group_size": None, "strategy": "tensor"}
+_CT_NVFP4 = {"num_bits": 4, "type": "float", "group_size": 16, "strategy": "tensor_group"}
+_CT_SPLIT = {
+    "group_0": {
+        "weights": _CT_FP8,
+        "targets": [
+            r"re:.*\.self_attn\.(q_proj|k_proj|v_proj|o_proj)$",
+            r"re:.*\.linear_attn\.(in_proj_qkv|in_proj_z|out_proj)$",
+            r"re:.*\.mlp\.shared_expert\.(gate_proj|up_proj|down_proj)$",
+        ],
+    },
+    "group_1": {
+        "weights": _CT_NVFP4,
+        "targets": [r"re:.*\.mlp\.experts\.\d+\.(gate_proj|up_proj|down_proj)$"],
+    },
+}
+
+
+def test_ct_mixed_resolves_each_component_from_its_own_group():
+    """Ornith-agentic: NVFP4 routed experts, per-tensor FP8 attention/GDN/shared expert."""
+    cfg = parse_config(_ct_config(_CT_SPLIT))
+    assert cfg.expert_quant == "nvfp4"
+    assert cfg.dense_quant == "fp8_pertensor"
+    assert cfg.attn_quant == "fp8_pertensor"
+    assert cfg.linear_attn_out_quant == "fp8_pertensor"
+
+
+def test_ct_single_group_targeting_every_linear_is_unchanged():
+    """Muse-Glimmer / Qwen3.6-27B shape: one NVFP4 group over ``Linear``. Everything must
+    stay NVFP4, exactly as before the per-component resolution."""
+    cfg = parse_config(_ct_config({"group_0": {"weights": _CT_NVFP4, "targets": ["Linear"]}}))
+    assert cfg.expert_quant == "nvfp4"
+    assert cfg.dense_quant == "nvfp4"
+    assert cfg.attn_quant == "nvfp4"
+
+
+def test_ct_component_probe_reads_the_targets():
+    from freetoken.models.qwen3_5_moe.config import _ct_component_quant
+
+    cfg = _ct_config(_CT_SPLIT)
+    assert _ct_component_quant(cfg, "experts") == "nvfp4"
+    assert _ct_component_quant(cfg, "attn") == "fp8_pertensor"
+    assert _ct_component_quant(cfg, "shared_expert") == "fp8_pertensor"
+
+
+def test_ct_component_probe_is_silent_when_nothing_matches():
+    from freetoken.models.qwen3_5_moe.config import _ct_component_quant
+
+    only_experts = {"group_0": {"weights": _CT_NVFP4, "targets": [r"re:.*\.mlp\.experts\..*"]}}
+    cfg = _ct_config(only_experts)
+    assert _ct_component_quant(cfg, "experts") == "nvfp4"
+    assert _ct_component_quant(cfg, "attn") is None  # -> caller falls back
+
+
+def test_shared_expert_helper_falls_back_to_ct_targets():
+    """The modelopt map wins when present; otherwise the CT targets answer."""
+    assert _shared_expert_quant(_ct_config(_CT_SPLIT)) == "fp8_pertensor"
+    assert _shared_expert_quant(_hf_config("FP8")) == "fp8_pertensor"
