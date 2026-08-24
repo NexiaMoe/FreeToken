@@ -49,5 +49,6 @@ for them; other checkpoints of the same architectures work too.
   `enable_thinking` to false, while poolside's published benchmarks were run with
   thinking on. A client can opt in per request (`reasoning_effort`, `thinking`, or
   `chat_template_kwargs`), but a harness that sends none of those never will. Start the
-  server with `--chat-template-kwargs '{"enable_thinking": true}'` to flip the default;
-  a request that asks for thinking either way still wins.
+  server with `--chat-template-kwargs {"enable_thinking":true}` to flip the default;
+  a request that asks for thinking either way still wins. Keep the JSON space-free —
+  a launcher that builds argv without a shell splits the value on whitespace.

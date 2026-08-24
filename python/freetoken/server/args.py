@@ -488,8 +488,9 @@ def parse_args(
         help=(
             "JSON object of chat-template kwargs applied to every request, UNDER the "
             "request's own keys. Use it to set a default a client cannot send itself, "
-            "e.g. --chat-template-kwargs '{\"enable_thinking\": true}' to make a "
-            "thinking-capable checkpoint reason by default."
+            "e.g. --chat-template-kwargs {\"enable_thinking\":true} to make a "
+            "thinking-capable checkpoint reason by default. Keep it space-free: a "
+            "launcher that builds argv without a shell splits the value on whitespace."
         ),
     )
 
