@@ -45,3 +45,9 @@ for them; other checkpoints of the same architectures work too.
   with an explicit message rather than failing later on a missing tensor. Its FP8
   KV-cache calibration scalars are dropped: FreeToken's KV pools are BF16, which is
   strictly more precise than the scheme they describe.
+- Laguna-XS does **not** think by default — its chat template sets
+  `enable_thinking` to false, while poolside's published benchmarks were run with
+  thinking on. A client can opt in per request (`reasoning_effort`, `thinking`, or
+  `chat_template_kwargs`), but a harness that sends none of those never will. Start the
+  server with `--chat-template-kwargs '{"enable_thinking": true}'` to flip the default;
+  a request that asks for thinking either way still wins.

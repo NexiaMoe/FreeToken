@@ -79,6 +79,7 @@ See [models.md](models.md#moe-backends) for what each backend does.
 | `--sampling-defaults` | model | Fill unspecified sampling params from the checkpoint's `generation_config.json` (`none` = framework defaults) |
 | `--tool-call-parser` | auto | Tool-call format; auto-inferred from the model family |
 | `--reasoning-parser` | auto | Splits chain-of-thought into `reasoning_content`; auto-inferred; `off` disables |
+| `--chat-template-kwargs` | `{}` | JSON object merged into every request's chat-template kwargs, *under* the request's own keys (e.g. `'{"enable_thinking": true}'` to think by default) |
 | `--enable-cache-report` | off | Report prefix-cache hits in each response's usage block |
 
 ## ft shell

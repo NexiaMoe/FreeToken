@@ -119,6 +119,22 @@ def effort_toggle_kwargs(
     return mapped
 
 
+def merge_server_ctk(server_defaults: dict | None, ctk: dict | None) -> dict:
+    """Server-wide ``--chat-template-kwargs`` UNDER a request's own keys.
+
+    Applied *after* the protocol-level effort/thinking mapping, never before: that
+    mapping short-circuits when any thinking key is already present, so seeding the
+    defaults first would make a server default swallow the request's own
+    ``reasoning_effort``. Request keys therefore always win, including a request that
+    explicitly disables thinking on a server that defaults it on.
+    """
+    if not server_defaults:
+        return dict(ctk or {})
+    merged = dict(server_defaults)
+    merged.update(ctk or {})
+    return merged
+
+
 def moe_total_experts(config: Any) -> int:
     """Total routed-expert slots the model has: experts per layer x MoE layers. Matches the
     engine's own basis (``Engine._resolve_auto_moe_cache_size``), so a residency rate derived

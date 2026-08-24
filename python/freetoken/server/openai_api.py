@@ -58,14 +58,16 @@ def _thinking_type(req: Any) -> str | None:
 def chat_request_to_genspec(
     req: ChatCompletionRequest,
     model_sampling: dict[str, Any],
+    server_ctk: dict[str, Any] | None = None,
 ) -> GenSpec:
     """OpenAI ChatCompletionRequest -> GenSpec (the OpenAI 'to_sampling_params')."""
-    from .model_meta import effort_toggle_kwargs
+    from .model_meta import effort_toggle_kwargs, merge_server_ctk
 
     ctk = req.chat_template_kwargs
     thinking_type = _thinking_type(req)
     if req.reasoning_effort or thinking_type:
         ctk = effort_toggle_kwargs(req.reasoning_effort, ctk, thinking_type=thinking_type)
+    ctk = merge_server_ctk(server_ctk, ctk)
     return GenSpec(
         messages=render_messages([m.model_dump(exclude_none=True) for m in req.messages]),
         sampling_params=resolve_sampling(
@@ -179,7 +181,9 @@ async def handle_chat_completion(
             )
 
     try:
-        spec = chat_request_to_genspec(req, model_sampling)
+        spec = chat_request_to_genspec(
+            req, model_sampling, getattr(state.config, "chat_template_kwargs", None)
+        )
     except ValueError as exc:
         return create_error_response(str(exc))
 
@@ -236,7 +240,9 @@ async def stream_chat_completion_chunks(
 ) -> AsyncIterator[bytes]:
     """Format generate_events() into the OpenAI chat.completion.chunk SSE stream."""
     if spec is None:
-        spec = chat_request_to_genspec(req, {})
+        spec = chat_request_to_genspec(
+            req, {}, getattr(state.config, "chat_template_kwargs", None)
+        )
     yield _sse(
         _chat_chunk(
             req,

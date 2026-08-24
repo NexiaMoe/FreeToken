@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Tuple
 
 import torch
@@ -26,6 +27,11 @@ class ServerArgs(SchedulerConfig):
     # Reasoning parser that splits <think> reasoning from content for OpenAI
     # responses. None disables it (default for models without a reasoning protocol).
     reasoning_parser: str | None = None
+    # Server-wide ``chat_template_kwargs`` defaults, applied UNDER each request's own
+    # keys (a request that says anything about thinking always wins). The seam for a
+    # harness that cannot send the knob itself: Laguna's template defaults
+    # ``enable_thinking`` to false, and a plain OpenAI client has no way to flip it.
+    chat_template_kwargs: dict = field(default_factory=dict)
     # "model": fill unspecified request sampling params from generation_config.json
     # (temperature/top_k/top_p), like sglang. "none": use framework defaults only.
     sampling_defaults: str = "model"
@@ -108,6 +114,17 @@ def parse_args(
         if n < 1:
             raise argparse.ArgumentTypeError("must be >= 1")
         return n
+
+    def _json_object(value: str) -> dict:
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise argparse.ArgumentTypeError(f"must be valid JSON: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise argparse.ArgumentTypeError(
+                f"must be a JSON object, got {type(parsed).__name__}"
+            )
+        return parsed
 
     def _infer_tool_call_parser(model_path: str) -> str:
         try:
@@ -449,6 +466,19 @@ def parse_args(
             "for OpenAI responses. 'auto' selects per model family (gpt-oss Harmony, "
             "<think> for qwen3/glm/minimax, <mm:think> for minimax-m3, ATEM to=self "
             "channels for muse-glimmer, gemma thought, dsv4); 'off' disables it."
+        ),
+    )
+
+    parser.add_argument(
+        "--chat-template-kwargs",
+        type=_json_object,
+        default={},
+        metavar="JSON",
+        help=(
+            "JSON object of chat-template kwargs applied to every request, UNDER the "
+            "request's own keys. Use it to set a default a client cannot send itself, "
+            "e.g. --chat-template-kwargs '{\"enable_thinking\": true}' to make a "
+            "thinking-capable checkpoint reason by default."
         ),
     )
 

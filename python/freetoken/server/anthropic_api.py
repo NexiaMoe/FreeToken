@@ -116,6 +116,7 @@ async def handle_anthropic_messages(
         spec = convert_anthropic_to_genspec(
             req, model_sampling,
             reasoning_parser=getattr(state.config, "reasoning_parser", None),
+            server_ctk=getattr(state.config, "chat_template_kwargs", None),
         )
         uid = await submit_generation(spec, state)
     except ValueError as exc:
@@ -153,6 +154,11 @@ async def handle_anthropic_count_tokens(req: AnthropicCountTokensRequest, state:
         )
     except ValueError as exc:
         return _anthropic_error_response(400, "invalid_request_error", str(exc))
+    # The counted prompt must be exactly the prompt a generation would tokenize, so the
+    # server-wide template defaults apply here too.
+    from .model_meta import merge_server_ctk
+
+    ctk = merge_server_ctk(getattr(state.config, "chat_template_kwargs", None), ctk)
     if not messages:
         # Non-empty on the wire but nothing survived conversion (e.g. image-only blocks on
         # this text-only server) — a client error, not a tokenizer fault.
@@ -303,10 +309,14 @@ def convert_anthropic_to_genspec(
     req: AnthropicMessagesRequest,
     model_sampling: dict[str, Any],
     reasoning_parser: str | None = None,
+    server_ctk: dict[str, Any] | None = None,
 ) -> GenSpec:
+    from .model_meta import merge_server_ctk
+
     messages, template_tools, parser_tools, ctk = convert_anthropic_prompt(
         req, reasoning_parser=reasoning_parser
     )
+    ctk = merge_server_ctk(server_ctk, ctk)
     return GenSpec(
         messages=messages,
         sampling_params=resolve_sampling(
