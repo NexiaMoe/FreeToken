@@ -121,6 +121,33 @@ def _dense_mlp_quant(hf_config: Any) -> str:
     return "none"
 
 
+def _shared_expert_quant(hf_config: Any) -> str | None:
+    """What the MoE *shared expert* is actually stored as, from the modelopt
+    ``quantized_layers`` map: ``"nvfp4"``, ``"fp8_pertensor"``, or ``None`` when the
+    checkpoint says nothing about it.
+
+    Most NVFP4 exports quantize the shared expert exactly like the routed experts, which
+    is why this used to be inferred from ``expert_quant``. A MIXED_PRECISION export need
+    not agree: apodex/Apodex-1.1-mini-NVFP4 lists ``.mlp.experts`` as NVFP4 while every
+    ``.mlp.shared_expert.*`` entry is FP8. Inferring FP4 there builds an
+    ``Nvfp4DenseColMerged`` the loader can never fill.
+    """
+    get = _quant_accessor(hf_config)
+    if get is None:
+        return None
+    layers = get("quantized_layers") or {}
+    if not isinstance(layers, dict):
+        return None
+    for name, spec in layers.items():
+        if ".mlp.shared_expert." in name or name.endswith(".mlp.shared_expert"):
+            algo = str((spec or {}).get("quant_algo", "")).lower()
+            if "fp4" in algo:
+                return "nvfp4"
+            if "fp8" in algo:
+                return "fp8_pertensor"
+    return None
+
+
 def _attn_quant(hf_config: Any) -> str:
     """Per-tensor FP8 on the *dense* attention/GDN projections. The modelopt
     ``MIXED_PRECISION`` checkpoints tag ``self_attn.{q,k,v,o}_proj`` and
@@ -188,13 +215,18 @@ def parse_config(hf_config: Any) -> ModelConfig:
     # quantizes both, so only probe for per-tensor FP8 when experts aren't block-fp8).
     attn_quant = "none" if expert_quant == "fp8_block" else _attn_quant(hf_config)
     linear_attn_out_quant = attn_quant
-    # NVFP4 checkpoints store the dense MLP projections (shared_expert; dense non-MoE MLP) as
-    # packed FP4 exactly like the routed experts -- independent of whether attention is FP8
-    # (mixed) or bf16 (pure NVFP4). Keep them native FP4 (W4A16) whenever the experts are
-    # NVFP4. The lm_head is detected separately (only the mixed checkpoint quantizes it).
-    # MoE-NVFP4 keeps the shared_expert dense MLP native FP4 (expert_quant=="nvfp4"); a dense
-    # (non-MoE) modelopt checkpoint instead tags the bare .mlp.{gate,up,down}_proj as NVFP4.
-    dense_quant = "nvfp4" if expert_quant == "nvfp4" else _dense_mlp_quant(hf_config)
+    # NVFP4 checkpoints usually store the dense MLP projections (shared_expert; dense
+    # non-MoE MLP) as packed FP4 exactly like the routed experts, so inferring FP4 from
+    # expert_quant is the right default. A MIXED_PRECISION export can disagree, and when
+    # its quantized_layers map names the shared expert explicitly that map wins: apodex's
+    # Qwen3.5 derivative pairs NVFP4 routed experts with an FP8 shared expert, and
+    # building Nvfp4DenseColMerged there leaves gate_up_proj.weight unfillable.
+    # The lm_head is detected separately (only the mixed checkpoint quantizes it).
+    declared_shared = _shared_expert_quant(hf_config)
+    if declared_shared is not None:
+        dense_quant = declared_shared
+    else:
+        dense_quant = "nvfp4" if expert_quant == "nvfp4" else _dense_mlp_quant(hf_config)
     lm_head_quant = _lm_head_quant(hf_config)
 
     # Compressed-tensors NVFP4 quantizes routed experts in the same native layout as

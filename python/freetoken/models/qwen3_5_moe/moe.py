@@ -35,6 +35,20 @@ class _SharedExpert(BaseOP):
                 hidden_size, [intermediate_size, intermediate_size], has_bias=False
             )
             self.down_proj = Nvfp4DenseLinear(intermediate_size, hidden_size, has_bias=False)
+        elif getattr(config, "dense_quant", "none") == "fp8_pertensor":
+            # MIXED_PRECISION export whose shared expert is per-tensor FP8 while the routed
+            # experts are NVFP4 (apodex/Apodex-1.1-mini-NVFP4). Same W8A16 kernel the dense
+            # attention projections use; the loader fuses gate|up into one piecewise
+            # per-output-row scale.
+            from freetoken.kernel.triton.fp8_pertensor_linear import (
+                Fp8PerTensorColMerged,
+                Fp8PerTensorLinear,
+            )
+
+            self.gate_up_proj = Fp8PerTensorColMerged(
+                hidden_size, [intermediate_size, intermediate_size], has_bias=False
+            )
+            self.down_proj = Fp8PerTensorLinear(intermediate_size, hidden_size, has_bias=False)
         else:
             self.gate_up_proj = LinearColParallelMerged(
                 hidden_size, [intermediate_size, intermediate_size], has_bias=False

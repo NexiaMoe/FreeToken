@@ -305,6 +305,13 @@ _PT_FP8_FUSE: dict[str, tuple[str, ...]] = {
     ".linear_attn.in_proj_qkvz": (
         ".linear_attn.in_proj_qkv", ".linear_attn.in_proj_z",
     ),
+    # A MIXED_PRECISION export may leave the shared expert per-tensor FP8 while the routed
+    # experts are NVFP4 (apodex/Apodex-1.1-mini-NVFP4). The model always wants gate|up
+    # fused, so without this pair the loader emits gate_proj/up_proj standalone and
+    # load_state_dict dies on the missing shared_expert.gate_up_proj.weight.
+    ".mlp.shared_expert.gate_up_proj": (
+        ".mlp.shared_expert.gate_proj", ".mlp.shared_expert.up_proj",
+    ),
 }
 # bf16 (unquantized) GDN b|a projections fused -> in_proj_ba (matches the fp8 split).
 _PT_BF16_FUSE: dict[str, tuple[str, ...]] = {
