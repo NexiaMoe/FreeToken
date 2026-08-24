@@ -15,6 +15,7 @@ from transformers import PreTrainedTokenizerBase
 from .effort import (
     EffortProfile,
     ThinkingProfile,
+    effective_efforts,
     probe_effort_profile,
     probe_thinking_profile,
     quantize_effort,
@@ -123,11 +124,24 @@ class TokenizeManager:
         with self._effort_lock:
             if self._effort_profile is None:
                 self._effort_profile = probe_effort_profile(self._probe_render)
-                logger.info(
-                    "reasoning-effort profile: supported=%s default=%s",
-                    sorted(self._effort_profile.supported) or "(none)",
-                    self._effort_profile.default,
-                )
+                # Report the vocabulary requests are actually served with, NOT
+                # ``profile.supported`` -- that is merely "the probe saw no rejection",
+                # which is the whole scale for a template that ignores the knob entirely.
+                # Logging the raw set there advertised seven gears that every request
+                # then reported as unsupported.
+                effective = effective_efforts(self._effort_profile)
+                if effective:
+                    logger.info(
+                        "reasoning-effort profile: supported=%s default=%s",
+                        sorted(effective),
+                        self._effort_profile.default,
+                    )
+                else:
+                    logger.info(
+                        "reasoning-effort profile: this checkpoint's template does not "
+                        "grade reasoning effort; the value is dropped and the template "
+                        "default applies (thinking on/off is unaffected)"
+                    )
             return self._effort_profile
 
     def thinking_profile(self) -> ThinkingProfile:
@@ -156,11 +170,23 @@ class TokenizeManager:
         key = (raw if isinstance(raw, str) else repr(raw), mapped)
         if key not in self._logged_effort_maps:
             self._logged_effort_maps.add(key)
-            logger.info(
-                "reasoning_effort %r is not supported by this checkpoint; using %s",
-                raw,
-                mapped if mapped is not None else "the template default",
-            )
+            if mapped is None:
+                # The template has no effort knob at all (or the value is too far from
+                # any gear it does grade). Only the GRADE is dropped -- an accompanying
+                # enable_thinking/thinking_mode still reaches the template, so this does
+                # not silently turn reasoning off.
+                logger.info(
+                    "reasoning_effort %r dropped: this checkpoint's template does not "
+                    "grade it; the template default applies (thinking on/off unaffected)",
+                    raw,
+                )
+            else:
+                logger.info(
+                    "reasoning_effort %r is not in this checkpoint's vocabulary; "
+                    "quantized to %r",
+                    raw,
+                    mapped,
+                )
         sanitized = dict(chat_template_kwargs)
         if mapped is None:
             del sanitized["reasoning_effort"]
