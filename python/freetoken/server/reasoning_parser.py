@@ -882,6 +882,9 @@ class ReasoningParser:
         "minimax_m3": MiniMaxM3ReasoningParser,
         "muse_glimmer": MuseGlimmerReasoningParser,
         "gemma4": GemmaThoughtReasoningParser,
+        # Laguna: plain <think>, but its template defaults thinking OFF -- the distinct
+        # name is what lets generation.py pick the right force_reasoning default.
+        "poolside": ThinkReasoningParser,
     }
 
     def __init__(

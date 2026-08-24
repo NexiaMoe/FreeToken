@@ -15,6 +15,7 @@ for them; other checkpoints of the same architectures work too.
 | gpt-oss | [openai/gpt-oss-120b](https://huggingface.co/openai/gpt-oss-120b), [openai/gpt-oss-20b](https://huggingface.co/openai/gpt-oss-20b) |
 | Gemma-4 | [google/gemma-4-26B-A4B-it](https://huggingface.co/google/gemma-4-26B-A4B-it), [nvidia/Gemma-4-26B-A4B-NVFP4](https://huggingface.co/nvidia/Gemma-4-26B-A4B-NVFP4), [google/gemma-4-12B-it](https://huggingface.co/google/gemma-4-12B-it), [nvidia/Gemma-4-31B-IT-NVFP4](https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4) .. |
 | MiniMax-M2.5 | [nvidia/MiniMax-M2.5-NVFP4](https://huggingface.co/nvidia/MiniMax-M2.5-NVFP4) |
+| Laguna-XS | [poolside/Laguna-XS-2.1-NVFP4](https://huggingface.co/poolside/Laguna-XS-2.1-NVFP4) |
 | Muse-Glimmer | [meta-models/Muse-Glimmer-30B](https://huggingface.co/meta-models/Muse-Glimmer-30B), [RedHatAI/Muse-Glimmer-30B-NVFP4](https://huggingface.co/RedHatAI/Muse-Glimmer-30B-NVFP4) |
 
 ## MoE backends
@@ -38,3 +39,9 @@ for them; other checkpoints of the same architectures work too.
 - DeepSeek-V4 checkpoints must keep the `inference/config.json` subdir — the
   authoritative model args are read from there.
 - Multimodal checkpoints are served text-only.
+- Laguna-XS is served from the NVFP4 checkpoint only. The BF16 checkpoint has no
+  expert-bank loader, and the INT4 one is group-128 *integer* compressed-tensors
+  (`pack-quantized`), a format with no kernels here — both are rejected at config parse
+  with an explicit message rather than failing later on a missing tensor. Its FP8
+  KV-cache calibration scalars are dropped: FreeToken's KV pools are BF16, which is
+  strictly more precise than the scheme they describe.

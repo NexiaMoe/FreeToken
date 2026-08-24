@@ -122,6 +122,13 @@ _MODEL_REGISTRY: dict[str, ModelSpec] = {
         "freetoken.models.glm_moe_dsa",
         "GlmMoeDsaForCausalLM",
     ),
+    # poolside Laguna XS 2.x: 3:1 sliding/full attention with per-type rope and per-type
+    # query-head counts, per-head gated attention, and GLM-style sigmoid/correction-bias
+    # MoE routing after one leading dense layer. NVFP4 routed + shared experts.
+    "LagunaForCausalLM": ModelSpec(
+        "freetoken.models.laguna",
+        "LagunaForCausalLM",
+    ),
 }
 
 

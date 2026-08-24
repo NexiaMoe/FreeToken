@@ -286,6 +286,18 @@ SUPPORTED_MODELS: tuple[AotModel, ...] = (
         arch_aliases=("MiniMaxM3SparseForCausalLM",),
     ),
     AotModel(
+        # 3:1 sliding/full attention; both groups share the KV geometry (8 kv heads x 128),
+        # so one store shape covers the model even though the two groups run different
+        # query-head counts (48 full / 64 sliding) -- query heads never reach store_cache.
+        name="poolside/Laguna-XS-2.1-NVFP4",
+        architecture="LagunaForCausalLM",
+        hidden_size=2048,
+        kv_groups=((8, 128),),
+        top_k=8,
+        moe_intermediate_size=512,
+        expert_formats=_NVFP4_FORMATS,
+    ),
+    AotModel(
         name="deepseek-ai/DeepSeek-V4-Flash",
         architecture="DeepseekV4ForCausalLM",
         hidden_size=4096,

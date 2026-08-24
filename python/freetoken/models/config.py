@@ -100,6 +100,11 @@ class KVCacheGroupSpec:
     # Attention-type taxonomy value for this group; drives the backend capability
     # matrix and (with the pool factory) selects the KV pool family.
     attn_type: AttnType = AttnType.FULL
+    # Query heads of this group's layers. 0 -> the model-wide ``ModelConfig.num_qo_heads``
+    # (every model whose layers share one head count). Laguna varies it per attention type
+    # (48 on full layers, 64 on sliding), so backends that size scratch per launch read the
+    # max over groups instead of the model-wide scalar.
+    num_qo_heads: int = 0
 
     @property
     def num_layers(self) -> int:
@@ -134,6 +139,9 @@ class FullAttentionGroupConfig(BaseAttentionGroupConfig):
     mla: bool = False
     index_head_dim: int = 0
     num_index_layers: int = 0
+    # Per-group query-head count; 0 inherits ``ModelConfig.num_qo_heads``. See
+    # ``KVCacheGroupSpec.num_qo_heads``.
+    num_qo_heads: int = 0
 
 
 @dataclass(frozen=True)
@@ -145,6 +153,9 @@ class SWAAttentionGroupConfig(BaseAttentionGroupConfig):
     head_dim: int
     rotary_config: RotaryConfig
     sliding_window: int
+    # Per-group query-head count; 0 inherits ``ModelConfig.num_qo_heads``. See
+    # ``KVCacheGroupSpec.num_qo_heads``.
+    num_qo_heads: int = 0
 
 
 @dataclass(frozen=True)
@@ -376,6 +387,12 @@ class ModelConfig:
             LinearGatedDeltaGroupConfig,
         )
 
+    def num_qo_heads_for_layer(self, layer_id: int) -> int:
+        """Query heads of ``layer_id``'s attention group, falling back to the model-wide
+        count for every model that does not vary it per layer (all but Laguna today)."""
+        group = self.attention_group_for_layer(layer_id)
+        return getattr(group, "num_qo_heads", 0) or self.num_qo_heads
+
     def attn_type_for_layer(self, layer_id: int) -> AttnType:
         """Canonical per-layer attention-type lookup (the taxonomy is declared
         top-down on the attention groups; this is the layer-granular view)."""
@@ -397,6 +414,7 @@ class ModelConfig:
                     num_kv_heads=self.num_kv_heads,
                     head_dim=self.head_dim,
                     sliding_window=None,
+                    num_qo_heads=self.num_qo_heads,
                 ),
             )
 
@@ -414,6 +432,7 @@ class ModelConfig:
                         index_head_dim=group.index_head_dim,
                         num_index_layers=group.num_index_layers,
                         attn_type=_full_group_attn_type(group),
+                        num_qo_heads=group.num_qo_heads or self.num_qo_heads,
                     )
                 )
             elif isinstance(group, SWAAttentionGroupConfig):
@@ -425,6 +444,7 @@ class ModelConfig:
                         head_dim=group.head_dim,
                         sliding_window=group.sliding_window,
                         attn_type=AttnType.SWA,
+                        num_qo_heads=group.num_qo_heads or self.num_qo_heads,
                     )
                 )
             elif isinstance(group, DSV4AttentionGroupConfig):

@@ -150,6 +150,11 @@ def parse_args(
             return "deepseekv32"
         if "deepseek" in marker and ("v3.2" in marker or "v32" in marker):
             return "deepseekv32"
+        # Laguna's template emits GLM-4.7's exact tool grammar
+        # (``<tool_call>name<arg_key>k</arg_key><arg_value>v</arg_value></tool_call>``),
+        # which is what the ecosystem calls the ``poolside_v1`` parser.
+        if "laguna" in marker or "poolside" in marker:
+            return "glm47"
         if "glm" in marker:
             return "glm47"
         if "mistral" in marker:
@@ -181,6 +186,10 @@ def parse_args(
             return "deepseekv32"
         if "qwen3" in marker or "qwen3.5" in marker or "qwen3_5" in marker:
             return "qwen3"
+        # Plain <think>, but the template defaults enable_thinking OFF (unlike glm/qwen3),
+        # which ``generation.py`` keys off this distinct name.
+        if "laguna" in marker or "poolside" in marker:
+            return "poolside"
         if "glm" in marker:
             return "glm"
         # M3 first ("minimax" is a substring): <mm:think> tags + 3 thinking gears,
@@ -433,7 +442,7 @@ def parse_args(
         default="auto",
         choices=[
             "auto", "off", "deepseekv32", "gpt_oss", "qwen3", "glm",
-            "minimax", "minimax_m3", "muse_glimmer", "gemma4",
+            "minimax", "minimax_m3", "muse_glimmer", "gemma4", "poolside",
         ],
         help=(
             "Reasoning parser that splits chain-of-thought into reasoning_content "

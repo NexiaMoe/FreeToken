@@ -89,8 +89,15 @@ class TritonAttentionBackend(BaseAttnBackend):
         self.max_graph_bs = 0
         self.max_kv_splits = 8
         self.prefill_tile_min_q = 128
-        self.num_q_heads = int(getattr(config, "num_qo_heads", 1))
         kv_groups = getattr(config, "kv_cache_group_specs", lambda: ())()
+        # Max over groups, not the model-wide scalar: Laguna's full-attention layers run 48
+        # query heads and its sliding layers 64, and the captured scratch has to cover the
+        # widest layer (a capture-time realloc would leave TritonCaptureData's own buffers
+        # undersized). Every uniform model reports its single count here.
+        self.num_q_heads = max(
+            (group.num_qo_heads for group in kv_groups if group.num_qo_heads),
+            default=int(getattr(config, "num_qo_heads", 1)),
+        )
         self.max_head_dim = max(
             (group.head_dim for group in kv_groups),
             default=int(getattr(config, "head_dim", 1)),
