@@ -116,10 +116,21 @@ def parse_args(
         return n
 
     def _json_object(value: str) -> dict:
+        # A GUI "extra launch args" box (the desktop app's) hands its line straight to
+        # argv without a shell, so copy-pasted shell quoting arrives as part of the
+        # value. A JSON document can never begin with an apostrophe, so stripping a
+        # matched pair is unambiguous rather than permissive.
+        text = value.strip()
+        if len(text) >= 2 and text[0] == "'" and text[-1] == "'":
+            text = text[1:-1].strip()
         try:
-            parsed = json.loads(value)
+            parsed = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise argparse.ArgumentTypeError(f"must be valid JSON: {exc}") from exc
+            raise argparse.ArgumentTypeError(
+                f"must be a JSON object: {exc}. Got {value!r} -- note that a launcher "
+                "which passes arguments straight to argv (no shell) needs the JSON "
+                "unquoted and space-free, e.g. {\"enable_thinking\":true}"
+            ) from exc
         if not isinstance(parsed, dict):
             raise argparse.ArgumentTypeError(
                 f"must be a JSON object, got {type(parsed).__name__}"

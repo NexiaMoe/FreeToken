@@ -112,6 +112,24 @@ def test_flag_parses_a_json_object():
     assert args.chat_template_kwargs == {"enable_thinking": True}
 
 
+@pytest.mark.parametrize(
+    "arg",
+    [
+        '{"enable_thinking": true}',      # plain
+        '{"enable_thinking":true}',       # space-free (GUI-safe)
+        '\'{"enable_thinking": true}\'',  # shell quoting pasted into a GUI arg box
+        '  {"enable_thinking": true}  ',  # stray whitespace
+    ],
+)
+def test_flag_tolerates_how_the_value_was_quoted(arg):
+    """A launcher that builds argv directly (the desktop app's 'extra launch args' box)
+    does not strip shell quotes, so a copy-pasted `'{...}'` arrives with the apostrophes
+    attached. JSON can never start with one, so accepting a matched pair is unambiguous."""
+    assert _parsed(["--chat-template-kwargs", arg]).chat_template_kwargs == {
+        "enable_thinking": True
+    }
+
+
 def test_flag_defaults_to_empty():
     assert _parsed([]).chat_template_kwargs == {}
 
