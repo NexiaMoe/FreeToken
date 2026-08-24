@@ -67,6 +67,23 @@ def _expert_quant(hf_config: Any) -> str:
 # it under this name.
 _compressed_tensors_nvfp4 = detect_compressed_tensors_nvfp4
 
+def _compressed_tensors_linear_attn_out_quant(hf_config: Any) -> str:
+    """Return GatedDeltaNet ``out_proj`` storage format for a compressed export.
+
+    An exact ``linear_attn.out_proj`` ignore entry means this projection remains bf16.
+    Broad ``linear_attn`` entries are not enough: exporters can retain those labels while
+    storing the output projection as native NVFP4.
+    """
+    get = _quant_accessor(hf_config)
+    ignored = () if get is None else (get("ignore") or ())
+    if isinstance(ignored, str):
+        ignored = (ignored,)
+    return (
+        "none"
+        if any(str(name).endswith(".linear_attn.out_proj") for name in ignored)
+        else "nvfp4"
+    )
+
 
 def _lm_head_quant(hf_config: Any) -> str:
     """Whether the checkpoint stores ``lm_head`` as NVFP4. modelopt MIXED_PRECISION lists it in
@@ -170,6 +187,7 @@ def parse_config(hf_config: Any) -> ModelConfig:
     # Dense attention/GDN quant is independent of the routed experts (block-fp8 already
     # quantizes both, so only probe for per-tensor FP8 when experts aren't block-fp8).
     attn_quant = "none" if expert_quant == "fp8_block" else _attn_quant(hf_config)
+    linear_attn_out_quant = attn_quant
     # NVFP4 checkpoints store the dense MLP projections (shared_expert; dense non-MoE MLP) as
     # packed FP4 exactly like the routed experts -- independent of whether attention is FP8
     # (mixed) or bf16 (pure NVFP4). Keep them native FP4 (W4A16) whenever the experts are
@@ -179,13 +197,16 @@ def parse_config(hf_config: Any) -> ModelConfig:
     dense_quant = "nvfp4" if expert_quant == "nvfp4" else _dense_mlp_quant(hf_config)
     lm_head_quant = _lm_head_quant(hf_config)
 
-    # compressed-tensors NVFP4 (dense Qwen3.6-27B): the attention (q/k/v/o, GDN out_proj) AND
-    # the dense MLP are W4A16 NVFP4; GDN in_proj_*, lm_head, norms stay bf16. Wire the shared
-    # W4A16 kernels (attn_quant=="nvfp4" routes the attention/GDN linears through them too).
+    # Compressed-tensors NVFP4 quantizes routed experts in the same native layout as
+    # dense linears. Routed MoE checkpoints must use native FP4 expert banks; dense
+    # variants have no banks. Some exports intentionally leave GDN out_proj bf16.
     if _compressed_tensors_nvfp4(hf_config):
+        if getattr(text, "num_experts", 0):
+            expert_quant = "nvfp4"
         attn_quant = "nvfp4"
         dense_quant = "nvfp4"
         lm_head_quant = "none"
+        linear_attn_out_quant = _compressed_tensors_linear_attn_out_quant(hf_config)
 
     # Dense variants (e.g. Qwen3.6-27B) report num_experts==0: route the decoder MLP through
     # the dense Qwen3_5DenseMLP instead of the MoE block.
@@ -255,6 +276,7 @@ def parse_config(hf_config: Any) -> ModelConfig:
         expert_quant=expert_quant,
         weight_block_size=weight_block_size,
         attn_quant=attn_quant,
+        linear_attn_out_quant=linear_attn_out_quant,
         dense_quant=dense_quant,
         lm_head_quant=lm_head_quant,
     )

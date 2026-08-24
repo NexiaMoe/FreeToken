@@ -32,14 +32,15 @@ _PACKED_EXPERT_PATTERN = re.compile(
     r"^model\.layers\.\d+\.mlp\.experts\.(gate_up_proj|down_proj)$"
 )
 
-# NVFP4 routed experts (nvidia modelopt checkpoint): per-expert, un-fused, under the raw
-# ``model.language_model.layers.N.mlp.experts.E.{proj}`` key. Matched against the RAW
-# weight_map key in nvfp4_banks. The ``model.language_model.`` anchor excludes the MTP
-# head's ``mtp.layers.N.mlp.experts.*`` tensors (served text-only, dropped).
+# NVFP4 routed experts are per-expert and unfused. ModelOpt stores
+# ``weight``/``weight_scale_2``; compressed-tensors stores
+# ``weight_packed``/``weight_global_scale``. The optional language-model prefix excludes
+# the MTP head's ``mtp.layers.N.mlp.experts.*`` tensors (served text-only, dropped).
 _NVFP4_EXPERT_RE = re.compile(r"\.mlp\.experts\.\d+\.")
 _NVFP4_EXPERT_KEY_RE = re.compile(
-    r"^model\.language_model\.layers\.(?P<layer>\d+)\.mlp\.experts\.(?P<expert>\d+)\."
-    r"(?P<proj>gate_proj|up_proj|down_proj)\.(?P<kind>weight|weight_scale|weight_scale_2)$"
+    r"^model\.(?:language_model\.)?layers\.(?P<layer>\d+)\.mlp\.experts\.(?P<expert>\d+)\."
+    r"(?P<proj>gate_proj|up_proj|down_proj)\."
+    r"(?P<kind>weight|weight_packed|weight_scale|weight_scale_2|weight_global_scale)$"
 )
 _NVFP4_SOURCE_SPEC = Nvfp4ExpertSourceSpec(
     key_pattern=_NVFP4_EXPERT_KEY_RE,
@@ -544,6 +545,9 @@ def _iter_weights_attn_fp8(
 _CT_NVFP4_FUSE: dict[str, tuple[str, ...]] = {
     ".self_attn.qkv_proj": (".self_attn.q_proj", ".self_attn.k_proj", ".self_attn.v_proj"),
     ".mlp.gate_up_proj": (".mlp.gate_proj", ".mlp.up_proj"),
+    ".mlp.shared_expert.gate_up_proj": (
+        ".mlp.shared_expert.gate_proj", ".mlp.shared_expert.up_proj",
+    ),
 }
 _CT_BF16_FUSE: dict[str, tuple[str, ...]] = {
     ".linear_attn.in_proj": (
@@ -566,14 +570,15 @@ def _iter_weights_compressed_tensors(
     model_path: str, device: torch.device, *, include_non_moe: bool, include_moe_experts: bool,
     nvfp4: bool,
 ) -> Iterator[tuple[str, torch.Tensor]]:
-    """Dense pass for a compressed-tensors NVFP4 checkpoint (e.g. Qwen3.6-27B).
+    """Dense-weight pass for a compressed-tensors NVFP4 Qwen checkpoint.
 
-    Keeps the NVFP4 attention (q/k/v/o, GDN out_proj) and dense MLP (gate/up/down) native
-    (W4A16) -- ``.weight`` (uint8) + ``.weight_scale`` (fp8 block) + ``.weight_global`` (fp16
-    per-row) -- when ``nvfp4``; otherwise dequantizes each to bf16. q/k/v -> ``qkv_proj``, dense gate/up -> ``gate_up_proj`` (output-dim concat).
-    GDN ``in_proj_{qkv,z,b,a}`` stay bf16 -> fused ``in_proj``; ``conv1d``/``A_log``/``dt_bias``/
-    gated ``norm`` pass through (fp32 for A_log/dt_bias). Gemma (1+w) norms get +1. lm_head and
-    embeddings are bf16. The model is dense (no routed experts), so there is no experts pass."""
+    Keeps NVFP4 attention (q/k/v/o, GDN out_proj) and dense MLP (gate/up/down) native
+    (W4A16) -- ``.weight`` (uint8) + ``.weight_scale`` (fp8 block) + ``.weight_global``
+    (fp16 per-row) -- when ``nvfp4``; otherwise dequantizes each to bf16. q/k/v ->
+    ``qkv_proj``, dense gate/up -> ``gate_up_proj`` (output-dim concat). GDN
+    ``in_proj_{qkv,z,b,a}`` stays bf16 -> fused ``in_proj``. Routed experts are loaded by
+    ``load_nvfp4_expert_sources`` and never enter this dense iterator.
+    """
     if get_tp_info().size > 1:
         raise NotImplementedError("qwen3_5_moe weight loading currently supports TP=1 only")
     if not include_non_moe:
@@ -606,6 +611,9 @@ def _iter_weights_compressed_tensors(
         ):
             for raw_name in reader.names_in(file):
                 if raw_name.startswith(("mtp.", "model.visual.", "visual.")):
+                    continue
+                # Native routed-expert banks are loaded separately by the offload provider.
+                if _NVFP4_EXPERT_RE.search(raw_name):
                     continue
                 if raw_name.endswith(_CT_SCALE_SUFFIXES):
                     continue  # consumed with weight_packed (or unused W4A4 activation scales)

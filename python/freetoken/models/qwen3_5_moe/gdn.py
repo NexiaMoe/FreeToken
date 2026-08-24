@@ -53,7 +53,7 @@ class Qwen3_5GatedDeltaNet(BaseOP):
     def __init__(
         self, hidden_size, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
         conv_kernel_size, rms_norm_eps, layer_id, expert_quant: str = "none",
-        attn_quant: str = "none",
+        attn_quant: str = "none", linear_attn_out_quant: str | None = None,
     ):
         self.layer_id = layer_id
         # The fla chunk/decode kernels read+write the recurrent state and the per-chunk h as
@@ -98,11 +98,12 @@ class Qwen3_5GatedDeltaNet(BaseOP):
         self.dt_bias = torch.empty(num_v_heads, dtype=torch.float32)
         self.A_log = torch.empty(num_v_heads, dtype=torch.float32)
         self.norm = _GatedRMSNorm(head_v_dim, eps=rms_norm_eps)
-        # out_proj follows the checkpoint quant: block-fp8 / per-tensor-fp8 / compressed-tensors
-        # NVFP4 (W4A16) / bf16. in_proj_* stay bf16 in every mode (above), so a compressed-tensors
-        # NVFP4 checkpoint (attn_quant=="nvfp4") only makes out_proj native FP4.
+        # Most checkpoints quantize GDN out_proj with the attention path, but some
+        # compressed-tensors exports deliberately retain it in bf16. Input projections
+        # stay bf16 in both layouts.
+        out_quant = attn_quant if linear_attn_out_quant is None else linear_attn_out_quant
         self.out_proj = make_replicated_quant(
-            expert_quant, attn_quant, self.value_dim, hidden_size, has_bias=False
+            expert_quant, out_quant, self.value_dim, hidden_size, has_bias=False
         )
 
     def _gate_params(self, a: torch.Tensor, b: torch.Tensor):
